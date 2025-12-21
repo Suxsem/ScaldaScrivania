@@ -18,13 +18,16 @@
 #include "nvs_flash.h"
 #include "esp_check.h"
 #include "nvs.h"
+#include "Ota.h"
 
 #define LED_GPIO GPIO_NUM_10
 #define HEAT_GPIO GPIO_NUM_11
+// #define BUTTON_GPIO GPIO_NUM_12
 #define BUTTON_GPIO GPIO_NUM_4
 
 #define NVS_NAMESPACE "suxsem"
-#define NVS_KEY       "level"
+#define NVS_LEVEL_KEY "level"
+#define NVS_LEVEL_CONFIG_KEY "level_config_%d"
 
 void turn_on();
 void turn_off();
@@ -37,10 +40,10 @@ led_indicator_handle_t led_handle;
 #define HEAT_LEVELS_NUM 5
 
 uint8_t heat_levels[] = {
-    20,
-    40,
     60,
+    70,
     80,
+    90,
     100,
 };
 
@@ -110,7 +113,14 @@ void sendZigbeeOnOff(bool on)
 void sendZigbeeLevel(uint8_t level)
 {
     esp_zb_lock_acquire(portMAX_DELAY);
-    esp_zb_zcl_set_attribute_val(ZB_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_CURRENT_LEVEL_ID, &level, false);
+    esp_zb_zcl_set_attribute_val(ZB_ENDPOINT, MY_CLUSTER, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, MY_ATTR_POWER_ID, &level, false);
+    esp_zb_lock_release();
+}
+
+void sendZigbeeLevelConfig(int index, uint8_t level_config)
+{
+    esp_zb_lock_acquire(portMAX_DELAY);
+    esp_zb_zcl_set_attribute_val(ZB_ENDPOINT, MY_CLUSTER, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, MY_ATTR_LEVEL_CONFIG_ID + index, &level_config, false);
     esp_zb_lock_release();
 }
 
@@ -118,44 +128,57 @@ nvs_handle_t my_nvs_handle;
 
 void save_level()
 {
-    nvs_set_u8(my_nvs_handle, NVS_KEY, heat_level);
+    nvs_set_u8(my_nvs_handle, NVS_LEVEL_KEY, heat_level);
     nvs_commit(my_nvs_handle);
 }
 
-static esp_timer_handle_t heat_timer;
-static uint32_t counter_ms = 0;  // contatore interno per duty cycle
+void save_level_config(int i)
+{
+    char key[16];
+    snprintf(key, sizeof(key), NVS_LEVEL_CONFIG_KEY, i);
+    nvs_set_u8(my_nvs_handle, key, heat_levels[i]);
+}
 
-#define HEAT_PERIOD_MS 10000  // 10 secondi
+static esp_timer_handle_t heat_timer;
+static uint32_t counter_ms = 0; // contatore interno per duty cycle
+
+#define HEAT_PERIOD_MS 10000 // 10 secondi
 
 // callback del timer, chiamata ogni 100ms
-static void heat_timer_cb(void* arg) {
+static void heat_timer_cb(void *arg)
+{
     uint32_t on_time = HEAT_PERIOD_MS * heat_levels[heat_level] / 100;
 
-    if(!heat_on) {
+    if (!heat_on)
+    {
         gpio_set_level(HEAT_GPIO, 1); // spento
         return;
     }
 
-    if(counter_ms < on_time) {
+    if (counter_ms < on_time)
+    {
         gpio_set_level(HEAT_GPIO, 0); // acceso
-    } else {
+    }
+    else
+    {
         gpio_set_level(HEAT_GPIO, 1); // spento
     }
 
     counter_ms += 100; // incremento in ms
-    if(counter_ms >= HEAT_PERIOD_MS) counter_ms = 0;
+    if (counter_ms >= HEAT_PERIOD_MS)
+        counter_ms = 0;
 }
 
 // inizializza GPIO e timer
-void heat_pwm_init(void) {
+void heat_pwm_init(void)
+{
     gpio_reset_pin(HEAT_GPIO);
     gpio_set_direction(HEAT_GPIO, GPIO_MODE_OUTPUT);
     gpio_set_level(HEAT_GPIO, 1);
 
     const esp_timer_create_args_t timer_args = {
         .callback = &heat_timer_cb,
-        .name = "heat_timer"
-    };
+        .name = "heat_timer"};
     esp_timer_create(&timer_args, &heat_timer);
     esp_timer_start_periodic(heat_timer, 100 * 1000); // 100ms
 }
@@ -248,27 +271,38 @@ static void bdb_start_top_level_commissioning_cb(uint8_t mode_mask)
 
 void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
 {
-    uint32_t *p_sg_p       = signal_struct->p_app_signal;
+    uint32_t *p_sg_p = signal_struct->p_app_signal;
     esp_err_t err_status = signal_struct->esp_err_status;
     esp_zb_app_signal_type_t sig_type = *p_sg_p;
-    switch (sig_type) {
+    switch (sig_type)
+    {
     case ESP_ZB_ZDO_SIGNAL_SKIP_STARTUP:
         ESP_LOGI("Zigbee", "Initialize Zigbee stack");
         esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_MODE_INITIALIZATION);
         break;
     case ESP_ZB_BDB_SIGNAL_DEVICE_FIRST_START:
     case ESP_ZB_BDB_SIGNAL_DEVICE_REBOOT:
-        if (err_status == ESP_OK) {
+        if (err_status == ESP_OK)
+        {
             ESP_LOGI("Zigbee", "Device started up in%s factory-reset mode", esp_zb_bdb_is_factory_new() ? "" : " non");
-            if (esp_zb_bdb_is_factory_new()) {
+            if (esp_zb_bdb_is_factory_new())
+            {
                 ESP_LOGI("Zigbee", "Start network steering");
                 esp_zb_bdb_start_top_level_commissioning(ESP_ZB_BDB_MODE_NETWORK_STEERING);
-            } else {
+            }
+            else
+            {
                 ESP_LOGI("Zigbee", "Device rebooted");
                 sendZigbeeLevel(heat_level);
                 sendZigbeeOnOff(heat_on);
+                for (int i = 0; i < HEAT_LEVELS_NUM; i++)
+                {
+                    sendZigbeeLevelConfig(i, heat_levels[i]);
+                }
             }
-        } else {
+        }
+        else
+        {
             ESP_LOGW("Zigbee", "%s failed with status: %s, retrying", esp_zb_zdo_signal_to_string(sig_type),
                      esp_err_to_name(err_status));
             esp_zb_scheduler_alarm((esp_zb_callback_t)bdb_start_top_level_commissioning_cb,
@@ -276,7 +310,8 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
         }
         break;
     case ESP_ZB_BDB_SIGNAL_STEERING:
-        if (err_status == ESP_OK) {
+        if (err_status == ESP_OK)
+        {
             esp_zb_ieee_addr_t extended_pan_id;
             esp_zb_get_extended_pan_id(extended_pan_id);
             ESP_LOGI("Zigbee", "Joined network successfully (Extended PAN ID: %02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x, PAN ID: 0x%04hx, Channel:%d, Short Address: 0x%04hx)",
@@ -285,7 +320,13 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
                      esp_zb_get_pan_id(), esp_zb_get_current_channel(), esp_zb_get_short_address());
             sendZigbeeLevel(heat_level);
             sendZigbeeOnOff(heat_on);
-        } else {
+            for (int i = 0; i < HEAT_LEVELS_NUM; i++)
+            {
+                sendZigbeeLevelConfig(i, heat_levels[i]);
+            }
+        }
+        else
+        {
             ESP_LOGI("Zigbee", "Network steering was not successful (status: %s)", esp_err_to_name(err_status));
             esp_zb_scheduler_alarm((esp_zb_callback_t)bdb_start_top_level_commissioning_cb, ESP_ZB_BDB_MODE_NETWORK_STEERING, 1000);
         }
@@ -306,31 +347,52 @@ static esp_err_t zb_attribute_handler(const esp_zb_zcl_set_attr_value_message_t 
                         message->info.status);
     ESP_LOGI("Zigbee", "Received message: endpoint(%d), cluster(0x%x), attribute(0x%x), data size(%d)", message->info.dst_endpoint, message->info.cluster,
              message->attribute.id, message->attribute.data.size);
-    if (message->info.dst_endpoint == ZB_ENDPOINT) {
-        if (message->info.cluster == ESP_ZB_ZCL_CLUSTER_ID_ON_OFF
-            && message->attribute.id == ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID
-            && message->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_BOOL) {
+    if (message->info.dst_endpoint == ZB_ENDPOINT)
+    {
+        if (message->info.cluster == ESP_ZB_ZCL_CLUSTER_ID_ON_OFF && message->attribute.id == ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID && message->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_BOOL)
+        {
             bool onOff = message->attribute.data.value ? *(bool *)message->attribute.data.value : 0;
             ESP_LOGI("Zigbee", "OnOff sets to %s", onOff ? "On" : "Off");
-            if (onOff) {
+            if (onOff)
+            {
                 turn_on();
-            } else {
+            }
+            else
+            {
                 turn_off();
             }
-        } else if (message->info.cluster == ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL
-                   && message->attribute.id == ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_CURRENT_LEVEL_ID
-                   && message->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U8) {
+        }
+        else if (message->info.cluster == MY_CLUSTER && message->attribute.id == MY_ATTR_POWER_ID)
+        {
             uint8_t level = message->attribute.data.value ? *(uint8_t *)message->attribute.data.value : 0;
             ESP_LOGI("Zigbee", "Level sets to %d", level);
-            if (level < HEAT_LEVELS_NUM) {
+            if (level < HEAT_LEVELS_NUM)
+            {
                 heat_level = level;
                 save_level();
-                if (heat_on) {
+                if (heat_on)
+                {
                     turn_on();
                 }
-            } else {
+            }
+            else
+            {
                 ESP_LOGW("Zigbee", "Level %d out of range", level);
             }
+        }
+        else if (message->info.cluster == MY_CLUSTER &&
+                 message->attribute.id >= MY_ATTR_LEVEL_CONFIG_ID &&
+                 message->attribute.id < MY_ATTR_LEVEL_CONFIG_ID + HEAT_LEVELS_NUM)
+        {
+            uint8_t level_config = message->attribute.data.value ? *(uint8_t *)message->attribute.data.value : 0;
+            int index = message->attribute.id - MY_ATTR_LEVEL_CONFIG_ID;
+            ESP_LOGI("Zigbee", "Level config %d sets to %d", index, level_config);
+            heat_levels[index] = level_config;
+            save_level_config(index);
+        }
+        else
+        {
+            ESP_LOGW("Zigbee", "Unhandled attribute set: cluster(0x%x), attribute(0x%x)", message->info.cluster, message->attribute.id);
         }
     }
     return ret;
@@ -339,11 +401,15 @@ static esp_err_t zb_attribute_handler(const esp_zb_zcl_set_attr_value_message_t 
 static esp_err_t zb_action_handler(esp_zb_core_action_callback_id_t callback_id, const void *message)
 {
     esp_err_t ret = ESP_OK;
-    switch (callback_id) {
+    switch (callback_id)
+    {
     case ESP_ZB_CORE_SET_ATTR_VALUE_CB_ID:
         ret = zb_attribute_handler((esp_zb_zcl_set_attr_value_message_t *)message);
         break;
     case ESP_ZB_CORE_CMD_DEFAULT_RESP_CB_ID:
+        break;
+    case ESP_ZB_CORE_OTA_UPGRADE_VALUE_CB_ID:
+        ret = zb_ota_upgrade_status_handler(*(esp_zb_zcl_ota_upgrade_value_message_t *)message);
         break;
     default:
         ESP_LOGW("Zigbee", "Receive Zigbee action(0x%x) callback", callback_id);
@@ -351,6 +417,8 @@ static esp_err_t zb_action_handler(esp_zb_core_action_callback_id_t callback_id,
     }
     return ret;
 }
+
+static esp_zb_attribute_list_t *my_attr_list;
 
 static void esp_zb_task(void *pvParameters)
 {
@@ -360,9 +428,9 @@ static void esp_zb_task(void *pvParameters)
 
     /* basic cluster create with fully customized */
     esp_zb_attribute_list_t *basic_attr_list = esp_zb_zcl_attr_list_create(ESP_ZB_ZCL_CLUSTER_ID_BASIC);
-    uint8_t zcl_version_id = 8; //default
+    uint8_t zcl_version_id = 8; // default
     esp_zb_basic_cluster_add_attr(basic_attr_list, ESP_ZB_ZCL_ATTR_BASIC_ZCL_VERSION_ID, &zcl_version_id);
-    uint8_t power_source = 1; //mains (single phase)
+    uint8_t power_source = 1; // mains (single phase)
     esp_zb_basic_cluster_add_attr(basic_attr_list, ESP_ZB_ZCL_ATTR_BASIC_POWER_SOURCE_ID, &power_source);
     esp_zb_basic_cluster_add_attr(basic_attr_list, ESP_ZB_ZCL_ATTR_BASIC_MANUFACTURER_NAME_ID, ESP_MANUFACTURER_NAME);
     esp_zb_basic_cluster_add_attr(basic_attr_list, ESP_ZB_ZCL_ATTR_BASIC_MODEL_IDENTIFIER_ID, ESP_MODEL_IDENTIFIER);
@@ -377,21 +445,38 @@ static void esp_zb_task(void *pvParameters)
     bool onoff_state = false;
     esp_zb_on_off_cluster_add_attr(onoff_attr_list, ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID, &onoff_state);
 
-    /* level control */
-    esp_zb_attribute_list_t *level_control_attr_list = esp_zb_zcl_attr_list_create(ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL);
-    uint8_t current_level = heat_level;
-    uint8_t min_level = 0;
-    uint8_t max_level = HEAT_LEVELS_NUM - 1;
-    esp_zb_level_cluster_add_attr(level_control_attr_list, ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_CURRENT_LEVEL_ID, &current_level);
-    esp_zb_level_cluster_add_attr(level_control_attr_list, ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_MIN_LEVEL_ID, &min_level);
-    esp_zb_level_cluster_add_attr(level_control_attr_list, ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_MAX_LEVEL_ID, &max_level);
+    /* custom cluster */
+    my_attr_list = esp_zb_zcl_attr_list_create(MY_CLUSTER);
+    uint8_t current_level = 0;
+    esp_zb_custom_cluster_add_custom_attr(my_attr_list, MY_ATTR_POWER_ID, ESP_ZB_ZCL_ATTR_TYPE_U8, ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE | ESP_ZB_ZCL_ATTR_ACCESS_REPORTING, &current_level);
+    for (int i = 0; i < HEAT_LEVELS_NUM; i++)
+    {
+        esp_zb_custom_cluster_add_custom_attr(my_attr_list, MY_ATTR_LEVEL_CONFIG_ID + i, ESP_ZB_ZCL_ATTR_TYPE_U8, ESP_ZB_ZCL_ATTR_ACCESS_READ_WRITE | ESP_ZB_ZCL_ATTR_ACCESS_REPORTING, &heat_levels[i]);
+    }
+
+    /* ota cluster */
+    esp_zb_ota_cluster_cfg_t ota_cluster_cfg = {
+        .ota_upgrade_file_version = OTA_UPGRADE_RUNNING_FILE_VERSION,
+        .ota_upgrade_downloaded_file_ver = OTA_UPGRADE_DOWNLOADED_FILE_VERSION,
+        .ota_upgrade_manufacturer = OTA_UPGRADE_MANUFACTURER,
+        .ota_upgrade_image_type = OTA_UPGRADE_IMAGE_TYPE,
+    };
+    esp_zb_attribute_list_t *ota_client_attr_list = esp_zb_ota_cluster_create(&ota_cluster_cfg);
+    /** add client parameters to ota client cluster */
+    esp_zb_zcl_ota_upgrade_client_variable_t variable_config = {
+        .timer_query = ESP_ZB_ZCL_OTA_UPGRADE_QUERY_TIMER_COUNT_DEF,
+        .hw_version = OTA_UPGRADE_HW_VERSION,
+        .max_data_size = OTA_UPGRADE_MAX_DATA_SIZE,
+    };
+    esp_zb_ota_cluster_add_attr(ota_client_attr_list, ESP_ZB_ZCL_ATTR_OTA_UPGRADE_CLIENT_DATA_ID, (void *)&variable_config);
 
     /* create cluster lists for this endpoint */
     esp_zb_cluster_list_t *esp_zb_cluster_list = esp_zb_zcl_cluster_list_create();
     esp_zb_cluster_list_add_basic_cluster(esp_zb_cluster_list, basic_attr_list, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
     esp_zb_cluster_list_add_identify_cluster(esp_zb_cluster_list, identify_attr_list, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
     esp_zb_cluster_list_add_on_off_cluster(esp_zb_cluster_list, onoff_attr_list, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
-    esp_zb_cluster_list_add_level_cluster(esp_zb_cluster_list, level_control_attr_list, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
+    esp_zb_cluster_list_add_custom_cluster(esp_zb_cluster_list, my_attr_list, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
+    esp_zb_cluster_list_add_ota_cluster(esp_zb_cluster_list, ota_client_attr_list, ESP_ZB_ZCL_CLUSTER_CLIENT_ROLE);
 
     esp_zb_ep_list_t *esp_zb_ep_list = esp_zb_ep_list_create();
     /* add created endpoint (cluster_list) to endpoint list */
@@ -399,10 +484,9 @@ static void esp_zb_task(void *pvParameters)
         .app_profile_id = ESP_ZB_AF_HA_PROFILE_ID,
         .app_device_id = ESP_ZB_HA_LEVEL_CONTROLLABLE_OUTPUT_DEVICE_ID,
         .app_device_version = 0,
-        .endpoint = ZB_ENDPOINT
-    };
+        .endpoint = ZB_ENDPOINT};
     esp_zb_ep_list_add_ep(esp_zb_ep_list, esp_zb_cluster_list, ep_config);
- 
+
     esp_zb_device_register(esp_zb_ep_list);
 
     esp_zb_core_action_handler_register(zb_action_handler);
@@ -425,12 +509,18 @@ void app_main(void)
     };
     ESP_ERROR_CHECK(esp_pm_configure(&pm_config));
     */
-   
+
     // nvs
 
     ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(nvs_open(NVS_NAMESPACE, NVS_READWRITE, &my_nvs_handle));
-    nvs_get_u8(my_nvs_handle, NVS_KEY, &heat_level);
+    nvs_get_u8(my_nvs_handle, NVS_LEVEL_KEY, &heat_level);
+    for (int i = 0; i <= HEAT_LEVELS_NUM; i++)
+    {
+        char key[16];
+        snprintf(key, sizeof(key), NVS_LEVEL_CONFIG_KEY, i);
+        nvs_get_u8(my_nvs_handle, key, &heat_levels[i]);
+    }
 
     // button
 
@@ -454,7 +544,7 @@ void app_main(void)
 
     args.long_press.press_time = 10000;
     ret |= iot_button_register_cb(btn, BUTTON_LONG_PRESS_START, &args, very_long_press_cb, NULL);
-    
+
     ESP_ERROR_CHECK(ret);
 
     // led
@@ -483,7 +573,7 @@ void app_main(void)
         .radio_config = ESP_ZB_DEFAULT_RADIO_CONFIG(),
         .host_config = ESP_ZB_DEFAULT_HOST_CONFIG(),
     };
-    
+
     ESP_ERROR_CHECK(esp_zb_platform_config(&zb_config));
     xTaskCreate(esp_zb_task, "Zigbee_main", 4096, NULL, 5, NULL);
 }

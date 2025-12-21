@@ -33,3 +33,8 @@ typedef struct zcl_basic_manufacturer_info_s {
     char *model_identifier;
 } zcl_basic_manufacturer_info_t;
 
+
+#define MY_CLUSTER                0xfeb2
+#define MY_ATTR_POWER_ID          0x0000  // ESP_ZB_ZCL_ATTR_TYPE_U8
+#define MY_ATTR_LEVEL_CONFIG_ID   0x0001  // ESP_ZB_ZCL_ATTR_TYPE_U8
+// ... 0x0005 reserved
