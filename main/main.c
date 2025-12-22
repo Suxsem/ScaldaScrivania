@@ -22,8 +22,8 @@
 
 #define LED_GPIO GPIO_NUM_10
 #define HEAT_GPIO GPIO_NUM_11
-// #define BUTTON_GPIO GPIO_NUM_12
-#define BUTTON_GPIO GPIO_NUM_4
+#define BUTTON_GPIO GPIO_NUM_12
+//#define BUTTON_GPIO GPIO_NUM_4
 
 #define NVS_NAMESPACE "suxsem"
 #define NVS_LEVEL_KEY "level"

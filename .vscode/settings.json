@@ -3,12 +3,12 @@
   "idf.espIdfPathWin": "C:\\Users\\semer\\esp\\v5.5\\esp-idf",
   "idf.pythonInstallPath": "C:\\Users\\semer\\.espressif\\tools\\idf-python\\3.11.2\\python.exe",
   "idf.openOcdConfigs": [
-    "board/esp32c6-builtin.cfg"
+    "board/esp32h2-builtin.cfg"
   ],
-  "idf.portWin": "COM5",
+  "idf.portWin": "COM3",
   "idf.toolsPathWin": "C:\\Users\\semer\\.espressif",
   "idf.customExtraVars": {
-    "IDF_TARGET": "esp32c6"
+    "IDF_TARGET": "esp32h2"
   },
   "clangd.path": "C:\\Users\\semer\\.espressif\\tools\\esp-clang\\esp-19.1.2_20250312\\esp-clang\\bin\\clangd.exe",
   "clangd.arguments": [
