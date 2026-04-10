@@ -5,7 +5,6 @@ import * as reporting from "zigbee-herdsman-converters/lib/reporting";
 import { repInterval } from "zigbee-herdsman-converters/lib/constants";
 import * as me from "zigbee-herdsman-converters/lib/modernExtend";
 import * as utils from "zigbee-herdsman-converters/lib/utils";
-import { zigbeeOTA } from "zigbee-herdsman-converters/lib/ota";
 
 const powerMap = {
   Bassa: 0,
@@ -15,27 +14,20 @@ const powerMap = {
   Nucleare: 4,
 };
 
-const tzPower = {
-  key: ['power'],
+const tzSuxsem = {
+  key: ['power', 'level_config_1', 'level_config_2', 'level_config_3', 'level_config_4', 'level_config_5', 'uptime', 'reset_reason'],  
   convertSet: async (entity, key, value, meta) => {
-    await entity.write('manuSpecificSuxsem', { power: powerMap[value] }, utils.getOptions(meta.mapped, entity));
-    return {
-      state: {
-        power: powerMap[value]
-      }
-    };
+    if (key === 'power') {
+      await entity.write('manuSpecificSuxsem', { power: powerMap[value] }, utils.getOptions(meta.mapped, entity));
+      return { state: { [key]: value } };
+    }
+    if (key.startsWith('level_config_')) {
+      await entity.write('manuSpecificSuxsem', { [key]: value }, utils.getOptions(meta.mapped, entity));
+      return { state: { [key]: value } };
+    }
   },
-};
-
-const tzLevelConfig = {
-  key: ['level_config_1', 'level_config_2', 'level_config_3', 'level_config_4', 'level_config_5'],
-  convertSet: async (entity, key, value, meta) => {
-    await entity.write('manuSpecificSuxsem', { [key]: value }, utils.getOptions(meta.mapped, entity));
-    return {
-      state: {
-        [key]: value
-      }
-    };
+  convertGet: async (entity, key, meta) => {
+    await entity.read('manuSpecificSuxsem', [key], utils.getOptions(meta.mapped, entity));
   },
 };
 
@@ -43,6 +35,9 @@ const fzSuxsem = {
   cluster: 'manuSpecificSuxsem',
   type: ['attributeReport', 'readResponse'],
   convert: (model, msg) => {
+
+    console.log(`>>> MESSAGGIO RICEVUTO: Endpoint=${msg.endpoint.ID}, Cluster=${msg.cluster}, Data=${JSON.stringify(msg.data)}`);
+
     const payload = {};
     if (msg.data.hasOwnProperty('power')) {
       const property = 'power';
@@ -57,6 +52,12 @@ const fzSuxsem = {
         payload[property] = state;
       }
     });
+    if (msg.data.hasOwnProperty('uptime')) {
+      payload.uptime = msg.data.uptime;
+    }
+    if (msg.data.hasOwnProperty('reset_reason')) {
+      payload.reset_reason = msg.data.reset_reason;
+    }
     return payload;
   },
 };
@@ -67,30 +68,34 @@ export default {
   model: 'ScaldaScrivania',
   vendor: 'Suxsem',
   description: 'ScaldaScrivania',
-  ota: zigbeeOTA,
+  ota: true,
   fromZigbee: [on_off, fzSuxsem],
-  toZigbee: [tzOnOff, tzPower, tzLevelConfig],
+  toZigbee: [tzOnOff, tzSuxsem],
   exposes: [
     presets.switch(),
-    presets.enum('power', access.STATE_SET, ['Bassa', 'Media', 'Alta', 'Massima', 'Nucleare']).withDescription('Potenza'),
+    presets.enum('power', access.ALL, ['Bassa', 'Media', 'Alta', 'Massima', 'Nucleare']).withDescription('Potenza'),
     ...["1", "2", "3", "4", "5"].map(i =>
-      presets.numeric(`level_config_${i}`, access.STATE_SET)
+      presets.numeric(`level_config_${i}`, access.ALL)
         .withDescription(`Configurazione livello ${i}, espresso in decimi di secondo da 0 a 100 (max 10s)`)
         .withValueMin(0)
         .withValueMax(100)
     ),
+    presets.numeric('uptime', access.STATE_GET).withUnit('s').withDescription('Secondi dall\'avvio'),
+    presets.numeric('reset_reason', access.STATE_GET).withDescription('Codice Reset ESP-IDF'),
   ],
   extend: [
     me.deviceAddCustomCluster("manuSpecificSuxsem", {
       ID: 0xfeb2,
       //    manufacturerCode: 0xFFF5,
       attributes: {
-        power: { ID: 0x0000, type: 32 }, // Uint8
-        level_config_1: { ID: 0x0001, type: 32 }, // Uint8
-        level_config_2: { ID: 0x0002, type: 32 }, // Uint8
-        level_config_3: { ID: 0x0003, type: 32 }, // Uint8
-        level_config_4: { ID: 0x0004, type: 32 }, // Uint8
-        level_config_5: { ID: 0x0005, type: 32 }, // Uint8
+        power: { ID: 0x0000, type: 32, write: true }, // Uint8
+        level_config_1: { ID: 0x0001, type: 32, write: true }, // Uint8
+        level_config_2: { ID: 0x0002, type: 32, write: true }, // Uint8
+        level_config_3: { ID: 0x0003, type: 32, write: true }, // Uint8
+        level_config_4: { ID: 0x0004, type: 32, write: true }, // Uint8
+        level_config_5: { ID: 0x0005, type: 32, write: true }, // Uint8
+        uptime: { ID: 0x0006, type: 35 },         // Uint32
+        reset_reason: { ID: 0x0007, type: 32 },   // Uint8
       },
     }),
   ],
